@@ -2,7 +2,7 @@
 
 SYNODownloadStationLinker 是一个因个人需求和练习目的，基于Avalonia搭建的利用群晖DownloadStation Web Api进行手动/自动下载的桌面客户端。
 
-[![](https://img.shields.io/badge/License-MIT-blue.svg)](\src\LICENSE.txt)
+[![](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/justapple2/SYNODownloadStationLinker/blob/main/LICENSE)
 
 ## 功能
 
