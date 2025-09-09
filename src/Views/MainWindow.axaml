@@ -1,0 +1,114 @@
+<Window
+    TransparencyLevelHint="Transparent"
+    Background="Transparent"
+    Closed="TopLevel_OnClosed"
+    Height="900"
+    Icon="/Assets/SYNODSTool.png"
+    Loaded="Control_OnLoaded"
+    SystemDecorations="None"
+    Title="SYNODownloadStationLinker"
+    Width="600"
+    d:DesignHeight="900"
+    d:DesignWidth="600"
+    mc:Ignorable="d"
+    x:Class="SYNODownloadStationLinker.Views.MainWindow"
+    x:DataType="vm:MainWindowViewModel"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="using:SYNODownloadStationLinker.ViewModels"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Design.DataContext>
+        <!--
+            This only sets the DataContext for the previewer in an IDE,
+            to set the actual DataContext for runtime, set the DataContext property in code (look at App.axaml.cs)
+        -->
+        <vm:MainWindowViewModel />
+    </Design.DataContext>
+
+    <Grid RowDefinitions="30,Auto,*">
+        <Border 
+            Background="Aquamarine" CornerRadius="6"
+            BorderBrush="Azure"
+            BorderThickness="1"
+            Height="28"
+            PointerPressed="InputElement_OnPointerPressed">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Stretch"  HorizontalAlignment="Stretch"
+                        FlowDirection="RightToLeft">
+                <Button Name="CloseBtn" Content="x" FontSize="10" FontWeight="ExtraBold" Click="CloseBtn_OnClick"/>
+                <Button Name="MinBtn" Content="-" FontSize="10"  FontWeight="ExtraBold" Click="MinBtn_OnClick" />
+                <TextBlock Margin="330,3,3,1" Text="SYNO Download Station Linker" FontWeight="SemiBold" Foreground="DarkCyan"></TextBlock>
+            </StackPanel>
+        </Border>
+        <Border Grid.Row="1" Background="BlanchedAlmond" CornerRadius="15"
+                BorderBrush="BlanchedAlmond" BorderThickness="3">
+            <StackPanel
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Stretch"
+                Margin="3"
+                Name="panel1"
+                Spacing="1">
+                
+                <StackPanel.Styles>
+                    <Style Selector="TextBlock">
+                        <Setter Property="Margin" Value="8" />
+                        <Setter Property="HorizontalAlignment" Value="Stretch" />
+                        <Setter Property="VerticalAlignment" Value="Stretch" />
+                        <Setter Property="FontWeight" Value="Heavy" />
+                        <Setter Property="FontSize" Value="18" />
+                    </Style>
+                    <Style Selector="Button">
+                        <Setter Property="Margin" Value="3" />
+                        
+                        <Setter Property="HorizontalContentAlignment" Value="Center" />
+                        <Setter Property="VerticalContentAlignment" Value="Center" />
+                        <Setter Property="FontStretch" Value="ExtraCondensed" />
+                    </Style>
+                </StackPanel.Styles>
+
+                <TextBlock Text="Nas url:" />
+
+                <TextBox Text="{Binding Uri, Mode=TwoWay}" Watermark="http://xxx.xxx.xxx.xxx:xxxx/" />
+                <Separator />
+                <TextBlock Text="User Name:" />
+
+                <TextBox Text="{Binding UserName, Mode=TwoWay}" Watermark="Enter User Name" />
+                <Separator />
+                <TextBlock Text="Password:" />
+
+                <TextBox
+                    PasswordChar="*"
+                    Text="{Binding Password, Mode=TwoWay}"
+                    Watermark="Enter Password" />
+                <Separator />
+                <TextBlock Text="Download Path:" />
+                <TextBox Text="{Binding Denision, Mode=TwoWay}" Watermark="Enter Download Path" />
+                <Separator />
+
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Button Command="{Binding InitCommand}" Content="LogIn" />
+                    <Button Command="{Binding TestCommand}" Content="Test" />
+                    <Button Command="{Binding StartListeningCommand}" Content="Start" />
+                    <Button Command="{Binding CreadAndDownloadCommand}" Content="Creat And Download" />
+                    <TextBlock Text="Listen"/>
+                    <ToggleSwitch 
+                                  IsChecked="{Binding IsListening}" />
+                </StackPanel>
+                <Separator />
+                <TextBox Height="96"
+                         FontSize="12"
+                         Text="{Binding DownloadPath, Mode=TwoWay}" Watermark="Dwonload uri" 
+                         />
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="2" Background="LightCyan">
+            <TextBlock Text="Response:" FontWeight="Heavy" />
+            <Separator />
+            <SelectableTextBlock Height="300" Text="{Binding Response, Mode=OneWay}" />
+            <Separator />
+        </StackPanel>
+
+    </Grid>
+</Window>
