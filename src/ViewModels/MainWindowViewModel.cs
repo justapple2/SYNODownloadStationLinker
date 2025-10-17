@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -117,8 +118,21 @@ public partial class MainWindowViewModel : ViewModelBase
         if (oldClipboardText != clibText && IsDownloadLink(clibText))
         {
             oldClipboardText = clibText;
+            var createTime= DateTime.Now.ToString("g");
+            try
+            {
+                NasPathHelper.GetLocalNASPath(this.Uri, this.Denision);
+            }
+            catch
+            {
+            }
+            
             var resp = await apiHandler.CreateTaskAsync(oldClipboardText, this.Denision);
-            Response = JsonHelper.Format(resp);
+            var sb = new StringBuilder();
+            sb.AppendLine(createTime);
+            sb.AppendLine(oldClipboardText);
+            sb.AppendLine(JsonHelper.Format(resp));
+            Response = sb.ToString();
         }
     }
     
@@ -199,8 +213,20 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        Response = await apiHandler.CreateTaskAsync(this.DownloadPath, Denision, this.UserName, Password);
-        Response = JsonHelper.Format(Response);
+        try
+        {
+            NasPathHelper.GetLocalNASPath(this.Uri, this.Denision);
+        }
+        catch
+        {
+        }
+       
+        var sb = new StringBuilder();
+        sb.AppendLine(DateTime.Now.ToString("g"));
+        var resp = await apiHandler.CreateTaskAsync(this.DownloadPath, Denision, this.UserName, Password);
+        sb.AppendLine(this.Denision);
+        sb.AppendLine(JsonHelper.Format(resp));
+        Response = sb.ToString();
     }
     
     [RelayCommand]
