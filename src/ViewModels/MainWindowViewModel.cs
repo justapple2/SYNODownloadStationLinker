@@ -217,8 +217,9 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             NasPathHelper.GetLocalNASPath(this.Uri, this.Denision);
         }
-        catch
+        catch(Exception ex)
         {
+            Response = $"Has not set, Error{Environment.NewLine}{ex.Message}";
         }
        
         var sb = new StringBuilder();

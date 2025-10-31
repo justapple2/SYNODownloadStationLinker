@@ -20,6 +20,8 @@ public class SYNODSApiHandler
 
     public async Task<string> CreateTaskAsync(string url, string destination, string user = "", string password = "")
     {
+        var current = destination.Replace('\\', '/').Trim('/');
+        
         var uri = createDownloadCreate(url, destination, user, password);
         return await RequireAndResponseAsync(uri);
     }

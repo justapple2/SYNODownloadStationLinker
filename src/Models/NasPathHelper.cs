@@ -18,7 +18,9 @@ public class NasPathHelper
         }
 
         // 2. 构造 UNC 路径
-        string uncPath = $@"\\{ip}{downloadPath.Replace('/', '\\')}";
+        var uncEnd = downloadPath.Replace('/', '\\');
+        if(!uncEnd.StartsWith('\\')) uncEnd = $"\\{uncEnd}";
+        string uncPath = $@"\\{ip}{uncEnd}";
 
         // 3. 创建文件夹（如果不存在）
         try
