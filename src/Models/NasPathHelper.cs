@@ -1,84 +1,119 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.IO;
-using System.Net;
+using System.Linq;
 
 namespace SYNODownloadStationLinker.Models;
 
-public class NasPathHelper
+public static class NasPathHelper
 {
-    public static string GetLocalNASPath(string nasUrl, string downloadPath, string username="", string password="")
+    public static NasPathResult EnsureDirectory(
+        string nasUrl,
+        string downloadPath,
+        string username = "",
+        string password = "")
     {
-        var msg = string.Empty;
-        // 1. 验证是否为 IPv4 地址
-        if (!IsIPv4Url(nasUrl, out string ip))
+        if (string.IsNullOrWhiteSpace(downloadPath))
         {
-            msg = "不是有效的 IPv4 地址";
-            return null;
+            return new NasPathResult(true, null, "未设置下载目录，跳过目录预创建。");
         }
 
-        // 2. 构造 UNC 路径
-        var uncEnd = downloadPath.Replace('/', '\\');
-        if(!uncEnd.StartsWith('\\')) uncEnd = $"\\{uncEnd}";
-        string uncPath = $@"\\{ip}{uncEnd}";
+        if (!TryGetHost(nasUrl, out var host))
+        {
+            return new NasPathResult(false, null, "NAS 地址无效，无法解析 SMB 主机名。");
+        }
 
-        // 3. 创建文件夹（如果不存在）
+        var segments = downloadPath
+            .Replace('/', '\\')
+            .Trim('\\')
+            .Split('\\', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (segments.Length == 0)
+        {
+            return new NasPathResult(true, null, "下载目录为空，跳过目录预创建。");
+        }
+
+        var shareRoot = $@"\\{host}\{segments[0]}";
+        var uncPath = segments.Length == 1
+            ? shareRoot
+            : $@"{shareRoot}\{string.Join('\\', segments.Skip(1))}";
+
         try
         {
-            if (!Directory.Exists(uncPath))
+            if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
             {
-                if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+                var connectResult = ConnectToNasShare(shareRoot, username, password);
+                if (!connectResult.Success && !Directory.Exists(uncPath))
                 {
-                    msg = "路径不存在，尝试连接 NAS...";
-                    ConnectToNAS(ip, username, password);
+                    return new NasPathResult(false, uncPath, connectResult.Message);
                 }
-                Directory.CreateDirectory(uncPath);
-                msg="文件夹已创建：" + uncPath;
             }
+
+            Directory.CreateDirectory(uncPath);
+            return new NasPathResult(true, uncPath, $"目录已就绪：{uncPath}");
         }
         catch (Exception ex)
         {
-            msg = "创建文件夹失败：" + ex.Message;
-            return null;
+            return new NasPathResult(false, uncPath, $"创建目录失败：{ex.Message}");
         }
-
-        return uncPath;
     }
 
-    private static bool IsIPv4Url(string url, out string ip)
+    private static bool TryGetHost(string nasUrl, out string host)
     {
-        ip = null;
-        if (Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+        host = string.Empty;
+
+        if (Uri.TryCreate(nasUrl, UriKind.Absolute, out var uri) && !string.IsNullOrWhiteSpace(uri.Host))
         {
-            string host = uri.Host;
-            if (IPAddress.TryParse(host, out IPAddress address) && address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-            {
-                ip = host;
-                return true;
-            }
+            host = uri.Host;
+            return true;
         }
+
+        var withoutSlashes = nasUrl.Trim().Trim('\\', '/');
+        if (!string.IsNullOrWhiteSpace(withoutSlashes) && !withoutSlashes.Contains('/'))
+        {
+            host = withoutSlashes;
+            return true;
+        }
+
         return false;
     }
 
-    private static void ConnectToNAS(string ip, string username, string password)
+    private static NasPathResult ConnectToNasShare(string shareRoot, string username, string password)
     {
-        string uncRoot = $@"\\{ip}";
-        string arguments = $@"use {uncRoot} /user:{username} {password}";
-
-        var process = new Process
+        try
         {
-            StartInfo = new ProcessStartInfo
+            using var process = new Process();
+            process.StartInfo = new ProcessStartInfo
             {
                 FileName = "net",
-                Arguments = arguments,
                 RedirectStandardOutput = true,
+                RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
-            }
-        };
+            };
+            process.StartInfo.ArgumentList.Add("use");
+            process.StartInfo.ArgumentList.Add(shareRoot);
+            process.StartInfo.ArgumentList.Add($"/user:{username}");
+            process.StartInfo.ArgumentList.Add(password);
+            process.StartInfo.ArgumentList.Add("/persistent:no");
 
-        process.Start();
-        string output = process.StandardOutput.ReadToEnd();
-        process.WaitForExit();
+            process.Start();
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            if (process.ExitCode == 0)
+            {
+                return new NasPathResult(true, shareRoot, "SMB 连接成功。");
+            }
+
+            var message = string.IsNullOrWhiteSpace(error) ? output : error;
+            return new NasPathResult(false, shareRoot, $"SMB 连接失败：{message.Trim()}");
+        }
+        catch (Exception ex)
+        {
+            return new NasPathResult(false, shareRoot, $"SMB 连接失败：{ex.Message}");
+        }
     }
 }
+

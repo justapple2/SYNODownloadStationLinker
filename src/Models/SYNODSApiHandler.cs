@@ -1,113 +1,401 @@
 using System;
+using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace SYNODownloadStationLinker.Models;
 
-public class SYNODSApiHandler
+public sealed class SYNODSApiHandler : IDisposable
 {
-    readonly string _uri = string.Empty;
+    private const string DownloadStationSession = "DownloadStation";
 
-    private HttpClient _client;
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        WriteIndented = true
+    };
 
-    private readonly HttpClientHandler _handler = new()
-        { ServerCertificateCustomValidationCallback = (sender, cert, chain, errors) => true };
+    private readonly string _baseUri;
+    private readonly CookieContainer _cookies = new();
+    private readonly HttpClientHandler _handler;
+    private readonly HttpClient _client;
+    private readonly Dictionary<string, SynologyApiInfo> _apiInfo = new(StringComparer.OrdinalIgnoreCase);
+
+    public string LastRawResponse { get; private set; } = string.Empty;
 
     public SYNODSApiHandler(string uri)
     {
-        _uri = uri;
+        if (string.IsNullOrWhiteSpace(uri))
+        {
+            throw new ArgumentException("NAS address can not be empty.", nameof(uri));
+        }
+
+        _baseUri = uri.TrimEnd('/');
+        _handler = new HttpClientHandler
+        {
+            CookieContainer = _cookies,
+            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+        };
+        _client = new HttpClient(_handler);
     }
 
-    public async Task<string> CreateTaskAsync(string url, string destination, string user = "", string password = "")
+    public async Task<SynologyResponse<Dictionary<string, SynologyApiInfo>>> QueryApiInfoAsync(
+        CancellationToken cancellationToken = default)
     {
-        var current = destination.Replace('\\', '/').Trim('/');
-        
-        var uri = createDownloadCreate(url, destination, user, password);
-        return await RequireAndResponseAsync(uri);
+        var result = await GetAsync<Dictionary<string, SynologyApiInfo>>(
+            "/webapi/query.cgi",
+            new Dictionary<string, string?>
+            {
+                ["api"] = "SYNO.API.Info",
+                ["version"] = "1",
+                ["method"] = "query",
+                ["query"] = string.Join(',', new[]
+                {
+                    "SYNO.API.Auth",
+                    "SYNO.DownloadStation.Info",
+                    "SYNO.DownloadStation.Task",
+                    "SYNO.DownloadStation.Statistic",
+                    "SYNO.DownloadStation.Schedule",
+                    "SYNO.FileStation.CreateFolder"
+                })
+            },
+            cancellationToken);
+
+        if (result.Success && result.Data is not null)
+        {
+            _apiInfo.Clear();
+            foreach (var item in result.Data)
+            {
+                _apiInfo[item.Key] = item.Value;
+            }
+        }
+
+        return result;
     }
 
-    public async Task<string> GetServerInfoAsync() => await RequireAndResponseAsync(createGetInfoConnect());
-
-    public async Task<string> GetList(params string[] paras) =>
-        await RequireAndResponseAsync(createDownloadListCommand(paras));
-    
-    
-    public async Task<string> LogeIn(string username, string password) =>
-        await RequireAndResponseAsync(createLoginConnect(username, password));
-
-    public async Task<string> LogeOut() => await RequireAndResponseAsync(createLogoutConnect());
-
-    public async Task<string> GetInfo() => await RequireAndResponseAsync(createGetInfo());
-    public async Task<string> GetConfig() => await RequireAndResponseAsync(createGetConfig());
-
-    private async Task<string> RequireAndResponseAsync(string url)
+    public async Task<SynologyResponse<object>> LoginAsync(
+        string username,
+        string password,
+        CancellationToken cancellationToken = default)
     {
-        if (_client == null) _client = new HttpClient(_handler);
-        var dst = string.Empty;
+        var version = GetVersion("SYNO.API.Auth", fallback: 7);
+        return await GetAsync<object>(
+            GetPath("SYNO.API.Auth", "auth.cgi"),
+            new Dictionary<string, string?>
+            {
+                ["api"] = "SYNO.API.Auth",
+                ["version"] = version.ToString(),
+                ["method"] = "login",
+                ["account"] = username,
+                ["passwd"] = password,
+                ["session"] = DownloadStationSession,
+                ["format"] = "cookie"
+            },
+            cancellationToken);
+    }
+
+    public Task<SynologyResponse<object>> LogoutAsync(CancellationToken cancellationToken = default)
+    {
+        return GetAsync<object>(
+            GetPath("SYNO.API.Auth", "auth.cgi"),
+            new Dictionary<string, string?>
+            {
+                ["api"] = "SYNO.API.Auth",
+                ["version"] = GetVersion("SYNO.API.Auth", fallback: 1).ToString(),
+                ["method"] = "logout",
+                ["session"] = DownloadStationSession
+            },
+            cancellationToken);
+    }
+
+    public Task<SynologyResponse<DownloadStationInfo>> GetInfoAsync(CancellationToken cancellationToken = default)
+    {
+        return GetDownloadStationAsync<DownloadStationInfo>(
+            "SYNO.DownloadStation.Info",
+            "Info",
+            "getinfo",
+            cancellationToken: cancellationToken);
+    }
+
+    public Task<SynologyResponse<DownloadStationConfig>> GetConfigAsync(CancellationToken cancellationToken = default)
+    {
+        return GetDownloadStationAsync<DownloadStationConfig>(
+            "SYNO.DownloadStation.Info",
+            "Info",
+            "getconfig",
+            cancellationToken: cancellationToken);
+    }
+
+    public Task<SynologyResponse<DownloadTaskList>> ListTasksAsync(
+        int offset = 0,
+        int limit = 20,
+        string additional = "detail,transfer",
+        CancellationToken cancellationToken = default)
+    {
+        return GetDownloadStationAsync<DownloadTaskList>(
+            "SYNO.DownloadStation.Task",
+            "Task",
+            "list",
+            new Dictionary<string, string?>
+            {
+                ["offset"] = offset.ToString(),
+                ["limit"] = limit.ToString(),
+                ["additional"] = additional
+            },
+            cancellationToken);
+    }
+
+    public Task<SynologyResponse<object>> CreateTaskAsync(
+        string url,
+        string destination,
+        string downloadUser = "",
+        string downloadPassword = "",
+        CancellationToken cancellationToken = default)
+    {
+        var parameters = new Dictionary<string, string?>
+        {
+            ["uri"] = url,
+            ["destination"] = NormalizeDestination(destination)
+        };
+
+        if (!string.IsNullOrWhiteSpace(downloadUser))
+        {
+            parameters["username"] = downloadUser;
+        }
+
+        if (!string.IsNullOrWhiteSpace(downloadPassword))
+        {
+            parameters["password"] = downloadPassword;
+        }
+
+        return PostDownloadStationAsync<object>(
+            "SYNO.DownloadStation.Task",
+            "Task",
+            "create",
+            parameters,
+            cancellationToken);
+    }
+
+    public Task<SynologyResponse<object>> PauseTaskAsync(string id, CancellationToken cancellationToken = default)
+    {
+        return PostDownloadStationAsync<object>(
+            "SYNO.DownloadStation.Task",
+            "Task",
+            "pause",
+            new Dictionary<string, string?> { ["id"] = id },
+            cancellationToken);
+    }
+
+    public Task<SynologyResponse<object>> ResumeTaskAsync(string id, CancellationToken cancellationToken = default)
+    {
+        return PostDownloadStationAsync<object>(
+            "SYNO.DownloadStation.Task",
+            "Task",
+            "resume",
+            new Dictionary<string, string?> { ["id"] = id },
+            cancellationToken);
+    }
+
+    public Task<SynologyResponse<object>> DeleteTaskAsync(
+        string id,
+        bool forceComplete = false,
+        CancellationToken cancellationToken = default)
+    {
+        return PostDownloadStationAsync<object>(
+            "SYNO.DownloadStation.Task",
+            "Task",
+            "delete",
+            new Dictionary<string, string?>
+            {
+                ["id"] = id,
+                ["force_complete"] = forceComplete ? "true" : "false"
+            },
+            cancellationToken);
+    }
+
+    private async Task<SynologyResponse<T>> GetDownloadStationAsync<T>(
+        string api,
+        string fallbackCgi,
+        string method,
+        Dictionary<string, string?>? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        var allParameters = CreateApiParameters(api, method, parameters);
+        return await GetAsync<T>(GetPath(api, $"DownloadStation/{fallbackCgi.ToLowerInvariant()}.cgi"), allParameters,
+            cancellationToken);
+    }
+
+    private async Task<SynologyResponse<T>> PostDownloadStationAsync<T>(
+        string api,
+        string fallbackCgi,
+        string method,
+        Dictionary<string, string?> parameters,
+        CancellationToken cancellationToken = default)
+    {
+        var allParameters = CreateApiParameters(api, method, parameters);
+        return await PostAsync<T>(GetPath(api, $"DownloadStation/{fallbackCgi.ToLowerInvariant()}.cgi"), allParameters,
+            cancellationToken);
+    }
+
+    private Dictionary<string, string?> CreateApiParameters(
+        string api,
+        string method,
+        Dictionary<string, string?>? parameters)
+    {
+        var result = new Dictionary<string, string?>
+        {
+            ["api"] = api,
+            ["version"] = GetVersion(api, fallback: 1).ToString(),
+            ["method"] = method
+        };
+
+        if (parameters is null)
+        {
+            return result;
+        }
+
+        foreach (var parameter in parameters)
+        {
+            if (!string.IsNullOrWhiteSpace(parameter.Value))
+            {
+                result[parameter.Key] = parameter.Value;
+            }
+        }
+
+        return result;
+    }
+
+    private async Task<SynologyResponse<T>> GetAsync<T>(
+        string path,
+        Dictionary<string, string?> parameters,
+        CancellationToken cancellationToken)
+    {
+        var response = await _client.GetAsync(BuildUri(path, parameters), cancellationToken);
+        return await ReadResponseAsync<T>(response, cancellationToken);
+    }
+
+    private async Task<SynologyResponse<T>> PostAsync<T>(
+        string path,
+        Dictionary<string, string?> parameters,
+        CancellationToken cancellationToken)
+    {
+        using var content = new FormUrlEncodedContent(CreateFormValues(parameters));
+        var response = await _client.PostAsync(BuildUri(path, null), content, cancellationToken);
+        return await ReadResponseAsync<T>(response, cancellationToken);
+    }
+
+    private async Task<SynologyResponse<T>> ReadResponseAsync<T>(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        LastRawResponse = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return new SynologyResponse<T>
+            {
+                Success = false,
+                Error = new SynologyError { Code = (int)response.StatusCode }
+            };
+        }
+
         try
         {
-            HttpResponseMessage response = await _client.GetAsync(url);
-            response.EnsureSuccessStatusCode();
-            dst = await response.Content.ReadAsStringAsync();
+            return JsonSerializer.Deserialize<SynologyResponse<T>>(LastRawResponse, JsonOptions)
+                   ?? new SynologyResponse<T>
+                   {
+                       Success = false,
+                       Error = new SynologyError { Code = -1 }
+                   };
         }
-        catch (Exception e)
+        catch (JsonException)
         {
-            dst = $"{e}";
+            return new SynologyResponse<T>
+            {
+                Success = false,
+                Error = new SynologyError { Code = -2 }
+            };
         }
-
-        return dst;
     }
 
+    private string BuildUri(string path, Dictionary<string, string?>? parameters)
+    {
+        var normalizedPath = path.StartsWith('/') ? path : $"/webapi/{path}";
+        var builder = new StringBuilder($"{_baseUri}{normalizedPath}");
+
+        if (parameters is null || parameters.Count == 0)
+        {
+            return builder.ToString();
+        }
+
+        builder.Append('?');
+        var isFirst = true;
+        foreach (var parameter in parameters)
+        {
+            if (string.IsNullOrWhiteSpace(parameter.Value))
+            {
+                continue;
+            }
+
+            if (!isFirst)
+            {
+                builder.Append('&');
+            }
+
+            builder
+                .Append(Uri.EscapeDataString(parameter.Key))
+                .Append('=')
+                .Append(Uri.EscapeDataString(parameter.Value));
+            isFirst = false;
+        }
+
+        return builder.ToString();
+    }
+
+    private static IEnumerable<KeyValuePair<string, string>> CreateFormValues(Dictionary<string, string?> values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value.Value))
+            {
+                yield return new KeyValuePair<string, string>(value.Key, value.Value);
+            }
+        }
+    }
+
+    private string GetPath(string api, string fallback)
+    {
+        if (_apiInfo.TryGetValue(api, out var info) && !string.IsNullOrWhiteSpace(info.Path))
+        {
+            return info.Path.TrimStart('/');
+        }
+
+        return fallback;
+    }
+
+    private int GetVersion(string api, int fallback)
+    {
+        if (_apiInfo.TryGetValue(api, out var info) && info.MaxVersion > 0)
+        {
+            return info.MaxVersion;
+        }
+
+        return fallback;
+    }
+
+    private static string NormalizeDestination(string destination)
+    {
+        return destination.Replace('\\', '/').Trim('/');
+    }
 
     public void Dispose()
     {
-        _client?.Dispose();
-    }
-
-    private string createGetInfoConnect()
-    {
-        var uri = _uri.TrimEnd('/');
-        return
-            $"{uri}/webapi/query.cgi?api=SYNO.API.Info&version=1&method=query&query=SYNO.API.Auth,SYNO.DownloadStation.Task";
-    }
-
-    private string createLoginConnect(string user, string password)
-    {
-        var uri = _uri.TrimEnd('/');
-        return
-            $"{uri}/webapi/auth.cgi?api=SYNO.API.Auth&version=7&method=login&account={user}&passwd={password}&session=DownloadStation&format=cookie";
-    }
-
-    private string createLogoutConnect()
-    {
-        var uri = _uri.TrimEnd('/');
-        return $"{uri}/webapi/auth.cgi?api=SYNO.API.Auth&version=1&method=logout&session=DownloadStation";
-    }
-
-    private string createDownloadHead(DownloadStationMothed method, CgiTypes apiType)
-    {
-        var uri = _uri.TrimEnd('/');
-        return
-            $"{uri}/webapi/DownloadStation/{apiType.ToString().ToLower()}.cgi?api=SYNO.DownloadStation.{apiType}&version=1&method={method}";
-    }
-
-    private string createGetInfo() => createDownloadHead(DownloadStationMothed.getinfo, CgiTypes.Info);
-
-    private string createGetConfig() => createDownloadHead(DownloadStationMothed.getconfig, CgiTypes.Info);
-
-    private string createDownloadListCommand(params string[] accect)
-    {
-        var paras = string.Join(",", accect).TrimEnd(',');
-        return $"{createDownloadHead(DownloadStationMothed.list, CgiTypes.Task)}&additional={paras}";
-    }
-
-    private string createDownloadCreate(string url, string destination="", string user = "", string password = "")
-    {
-        var end2 = $"&destination={destination}";
-        if(string.IsNullOrEmpty(destination)) end2=string.Empty;
-        var end = $"&username={user}&password={password}";
-        if (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(password)) end = string.Empty;
-        return
-            $"{createDownloadHead(DownloadStationMothed.create, CgiTypes.Task)}&uri={url}{end}{end2}";
+        _client.Dispose();
+        _handler.Dispose();
     }
 }
+

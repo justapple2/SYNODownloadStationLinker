@@ -6,10 +6,10 @@ namespace SYNODownloadStationLinker.Models;
 
 public class AESKey
 {
-    private static string savePath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-    public string Key { get; set; }
+    private static readonly string SavePath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
 
-    public string IV { get; set; }
+    public string Key { get; set; } = string.Empty;
+    public string IV { get; set; } = string.Empty;
 
     public void GetArrayBytes(out byte[] key, out byte[] iv)
     {
@@ -17,16 +17,16 @@ public class AESKey
         {
             key = [];
             iv = [];
+            return;
         }
 
         key = Convert.FromBase64String(Key);
         iv = Convert.FromBase64String(IV);
     }
 
-
     public static AESKey Load()
     {
-        var fileName = Path.Combine(savePath, "AESKey.json");
+        var fileName = Path.Combine(SavePath, "AESKey.json");
         if (!File.Exists(fileName))
         {
             var newAes = Create();
@@ -34,13 +34,12 @@ public class AESKey
             return newAes;
         }
 
-        var tmp = JsonHelper.Deserialize<AESKey>(File.ReadAllText(fileName));
-        return tmp;
+        return JsonHelper.Deserialize<AESKey>(File.ReadAllText(fileName)) ?? Create();
     }
 
     private static void Save(AESKey aes)
     {
-        var fileName = Path.Combine(savePath, "AESKey.json");
+        var fileName = Path.Combine(SavePath, "AESKey.json");
         var tmp = JsonHelper.Serialize(aes);
         using var fs = new FileStream(fileName, FileMode.Create, FileAccess.Write, FileShare.None);
         using var sr = new StreamWriter(fs);
@@ -49,17 +48,16 @@ public class AESKey
 
     private static AESKey Create()
     {
-        // 生成密钥和IV
-        byte[] key = new byte[32]; // 256位密钥
-        byte[] iv = new byte[16]; // 128位IV
-        using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
-        {
-            rng.GetBytes(key);
-            rng.GetBytes(iv);
-        }
+        byte[] key = new byte[32];
+        byte[] iv = new byte[16];
+        RandomNumberGenerator.Fill(key);
+        RandomNumberGenerator.Fill(iv);
 
-        var kStr = Convert.ToBase64String(key);
-        var ivStr = Convert.ToBase64String(iv);
-        return new AESKey() { Key = kStr, IV = ivStr };
+        return new AESKey
+        {
+            Key = Convert.ToBase64String(key),
+            IV = Convert.ToBase64String(iv)
+        };
     }
 }
+

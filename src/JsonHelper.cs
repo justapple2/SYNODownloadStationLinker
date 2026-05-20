@@ -5,24 +5,22 @@ using System.Text.Unicode;
 
 namespace SYNODownloadStationLinker;
 
-public class JsonHelper
+public static class JsonHelper
 {
-    // 默认的 JSON 序列化选项
-    private static readonly JsonSerializerOptions _defaultOptions = new JsonSerializerOptions
+    private static readonly JsonSerializerOptions DefaultOptions = new()
     {
-        WriteIndented = true, // 格式化输出（美化 JSON）
-        PropertyNameCaseInsensitive = true, // 属性名称不区分大小写
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true,
         Encoder = JavaScriptEncoder.Create(UnicodeRanges.All)
     };
 
-
     public static string Serialize<T>(T obj, bool indented = false)
     {
-        var options = indented ? new JsonSerializerOptions(_defaultOptions) { WriteIndented = true } : _defaultOptions;
+        var options = indented ? new JsonSerializerOptions(DefaultOptions) { WriteIndented = true } : DefaultOptions;
         return JsonSerializer.Serialize(obj, options);
     }
 
-    public static T Deserialize<T>(string json)
+    public static T? Deserialize<T>(string json)
     {
         if (string.IsNullOrWhiteSpace(json))
         {
@@ -31,7 +29,7 @@ public class JsonHelper
 
         try
         {
-            return JsonSerializer.Deserialize<T>(json, _defaultOptions);
+            return JsonSerializer.Deserialize<T>(json, DefaultOptions);
         }
         catch
         {
@@ -39,36 +37,25 @@ public class JsonHelper
         }
     }
 
-
-    public static bool TryDeserialize<T>(string json, out T result)
+    public static bool TryDeserialize<T>(string json, out T? result)
     {
-        try
-        {
-            result = Deserialize<T>(json);
-            return true;
-        }
-        catch
-        {
-            result = default;
-            return false;
-        }
+        result = Deserialize<T>(json);
+        return result is not null;
     }
-
 
     public static string Format(string json)
     {
         try
         {
             var jsonElement = JsonSerializer.Deserialize<JsonElement>(json);
-            return JsonSerializer.Serialize(jsonElement, _defaultOptions);
+            return JsonSerializer.Serialize(jsonElement, DefaultOptions);
         }
         catch (JsonException ex)
         {
-            throw new InvalidOperationException("格式化 JSON 字符串失败，请检查输入内容。", ex);
+            throw new InvalidOperationException("格式化 JSON 失败，请检查输入内容。", ex);
         }
     }
 
- 
     public static bool IsValid(string json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -87,9 +74,10 @@ public class JsonHelper
         }
     }
 
-    public static T DeepClone<T>(T obj)
+    public static T? DeepClone<T>(T obj)
     {
         var jsonData = Serialize(obj);
         return Deserialize<T>(jsonData);
     }
 }
+
